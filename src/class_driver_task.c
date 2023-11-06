@@ -179,11 +179,13 @@ void class_driver_task(void *arg)
         }
     }
 
+    /*
     ESP_LOGI(TAG, "Deregistering Client");
     ESP_ERROR_CHECK(usb_host_client_deregister(driver_obj.client_hdl));
 
     //Wait to be deleted
     xSemaphoreGive(signaling_sem);
     vTaskSuspend(NULL);
+	*/
 }
 
