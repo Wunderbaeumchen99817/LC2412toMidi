@@ -132,10 +132,33 @@ static void aciton_close_dev(class_driver_t *driver_obj)
     driver_obj->actions |= ACTION_EXIT;
 }
 
+static void data_received(void *arg) {
+
+}
+
+static void start_midi(void *arg) {
+	usb_device_handle_t dev_hdl = (usb_device_handle_t)arg;
+
+	//configure usb-transfer object
+	uint8_t *data_buffer[10];
+
+    usb_transfer_t transfer_obj = {
+    		.callback = data_received,
+			.data_buffer = *data_buffer,
+			.data_buffer_size = sizeof(*data_buffer),
+			.device_handle = dev_hdl
+    };
+
+    usb_host_transfer_alloc(sizeof(*data_buffer), 0, &transfer_obj);
+
+}
+
 void class_driver_task(void *arg)
 {
     SemaphoreHandle_t signaling_sem = (SemaphoreHandle_t)arg;
     class_driver_t driver_obj = {0};
+
+
 
     //Wait until daemon task has installed USB Host Library
     xSemaphoreTake(signaling_sem, portMAX_DELAY);
