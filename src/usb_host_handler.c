@@ -5,9 +5,9 @@
  *      Author: Katharina
  */
 
-#include "../include/usb_host_handler.h"
+#include "usb_host_handler.h"
 
-#include "../include/midi_class_driver.h"
+#include "midi_class_driver.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"

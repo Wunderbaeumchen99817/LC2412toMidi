@@ -6,6 +6,7 @@ idf_component_register(
     	"../src/midi_class_driver_helper.c"
     	"../src/midi_class_driver.c"
     	"../src/usb_host_handler.c"
+    	"../src/midi_handler.c"
     INCLUDE_DIRS
     	"../include"    # optional, add here public include directories
     PRIV_INCLUDE_DIRS   # optional, add here private include directories

@@ -31,7 +31,16 @@ void midi_class_helper_get_interface_settings(const usb_config_desc_t *usb_conf,
 	    			interface_conf->alternate_setting = interface_desc->bAlternateSetting;
 
 	    			printf("Interface Number: %d, Alternate Setting: %d \n", interface_conf->interface_nmbr, interface_conf->alternate_setting);
-	    			return;
+
+	    		}
+	    	}
+	    	if(next_desc->bDescriptorType == USB_B_DESCRIPTOR_TYPE_ENDPOINT) {
+	    		usb_ep_desc_t *ep_desc = (usb_ep_desc_t *)next_desc;
+	    		if(USB_EP_DESC_GET_EP_DIR(ep_desc)) {
+	    			//endpoint is IN
+	    			interface_conf->endpoint_address = ep_desc->bEndpointAddress;
+	    			interface_conf->max_packet_size = ep_desc->wMaxPacketSize;
+	    			printf("endpoint address: %d , mps: %d\n", interface_conf->endpoint_address, interface_conf->max_packet_size);
 	    		}
 	    	}
 

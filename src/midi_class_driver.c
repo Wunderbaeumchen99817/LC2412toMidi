@@ -7,12 +7,14 @@
 #include "midi_class_driver.h"
 
 #include <stdlib.h>
+#include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "esp_log.h"
 #include "usb/usb_host.h"
 
 #include "midi_class_driver_helper.h"
+#include "midi_handler.h"
 
 #define ACTION_OPEN_DEV             0x01
 #define ACTION_GET_DEV_INFO         0x02
@@ -20,16 +22,16 @@
 #define ACTION_GET_CONFIG_DESC      0x08
 #define ACTION_GET_STR_DESC         0x10
 #define ACTION_CLAIM_INTERFACE		0x20
-#define ACTION_CLOSE_DEV            0x40
-#define ACTION_EXIT                 0x80
+#define ACTION_START_READING_DATA	0x40
+#define ACTION_CLOSE_DEV            0x80
+#define ACTION_EXIT                 0xA0
 
 typedef struct {
     usb_host_client_handle_t client_hdl;
     uint8_t dev_addr;
     usb_device_handle_t dev_hdl;
     uint32_t actions;
-    uint8_t interface_nmbr;
-    uint8_t alternate_setting;
+    interface_config_t interface_conf;
 } class_driver_t;
 
 static const char *TAG = "CLASS";
@@ -103,12 +105,11 @@ static void action_get_config_desc(class_driver_t *driver_obj)
     usb_print_config_descriptor(config_desc, NULL);
 
     //save interface number & alternative setting for later use
-    interface_config_t interface_conf = {0};
+    interface_config_t interface_config = {0};
     ESP_ERROR_CHECK(usb_host_get_active_config_descriptor(driver_obj->dev_hdl, &config_desc));
-    midi_class_helper_get_interface_settings(config_desc, &interface_conf);
+    midi_class_helper_get_interface_settings(config_desc, &interface_config);
 
-    driver_obj->interface_nmbr = interface_conf.interface_nmbr;
-    driver_obj->alternate_setting = interface_conf.alternate_setting;
+    driver_obj->interface_conf = interface_config;
 
     //Get the device's string descriptors next
     driver_obj->actions &= ~ACTION_GET_CONFIG_DESC;
@@ -140,16 +141,46 @@ static void action_get_str_desc(class_driver_t *driver_obj)
 static void action_claim_interface(class_driver_t *driver_obj) {
 	assert(driver_obj->dev_hdl != NULL);
 	ESP_LOGI(TAG, "Claiming Interface");
-    ESP_ERROR_CHECK(usb_host_interface_claim(driver_obj->client_hdl, driver_obj->dev_hdl, driver_obj->interface_nmbr, driver_obj->alternate_setting));
+    ESP_ERROR_CHECK(usb_host_interface_claim(
+    		driver_obj->client_hdl,
+			driver_obj->dev_hdl,
+			driver_obj->interface_conf.interface_nmbr,
+			driver_obj->interface_conf.alternate_setting));
 
-    //Nothing to do until the device disconnects
     driver_obj->actions &= ~ACTION_CLAIM_INTERFACE;
+    driver_obj->actions |= ACTION_START_READING_DATA;
+}
+
+static void action_start_reading_data(class_driver_t *driver_obj) {
+	assert(driver_obj->dev_hdl != NULL);
+	ESP_LOGI(TAG, "Starting midi task");
+
+	//usb_device_handle_t dev_hdl = driver_obj->dev_hdl;
+
+		//configure usb-transfer object
+	    usb_transfer_t *transfer_obj;
+
+	    usb_host_transfer_alloc(1024, 0, &transfer_obj);
+
+	    //memset(transfer_obj->data_buffer, 0xAA, 1024);
+	    transfer_obj->num_bytes = driver_obj->interface_conf.max_packet_size;
+   		transfer_obj->callback = midi_usb_host_callback;
+		transfer_obj->bEndpointAddress = driver_obj->interface_conf.endpoint_address;
+		transfer_obj->device_handle = driver_obj->dev_hdl;
+	printf("set transfer parameters\n");
+    ESP_ERROR_CHECK(usb_host_transfer_submit(transfer_obj));
+	//Nothing to do until the device disconnects
+    driver_obj->actions &= ~ACTION_START_READING_DATA;
+
 }
 
 static void aciton_close_dev(class_driver_t *driver_obj)
 {
 	ESP_LOGI(TAG, "Releasing interface");
-	ESP_ERROR_CHECK(usb_host_interface_release(driver_obj->client_hdl, driver_obj->dev_hdl, driver_obj->interface_nmbr));
+	ESP_ERROR_CHECK(usb_host_interface_release(
+			driver_obj->client_hdl,
+			driver_obj->dev_hdl,
+			driver_obj->interface_conf.interface_nmbr));
     ESP_LOGI(TAG, "Closing device");
 	ESP_ERROR_CHECK(usb_host_device_close(driver_obj->client_hdl, driver_obj->dev_hdl));
     driver_obj->dev_hdl = NULL;
@@ -159,29 +190,10 @@ static void aciton_close_dev(class_driver_t *driver_obj)
     driver_obj->actions |= ACTION_EXIT;
 }
 
-static void start_midi(void *arg) {
-	usb_device_handle_t dev_hdl = (usb_device_handle_t)arg;
-
-	//configure usb-transfer object
-	uint8_t *data_buffer[10];
-
-    usb_transfer_t transfer_obj = {
-    		.callback = NULL,
-			.data_buffer = *data_buffer,
-			.data_buffer_size = sizeof(*data_buffer),
-			.device_handle = dev_hdl
-    };
-
-    //usb_host_transfer_alloc(sizeof(*data_buffer), 0, transfer_obj);
-
-}
-
 void class_driver_task(void *arg)
 {
     SemaphoreHandle_t signaling_sem = (SemaphoreHandle_t)arg;
     class_driver_t driver_obj = {0};
-
-
 
     //Wait until daemon task has installed USB Host Library
     xSemaphoreTake(signaling_sem, portMAX_DELAY);
@@ -219,6 +231,9 @@ void class_driver_task(void *arg)
             if(driver_obj.actions & ACTION_CLAIM_INTERFACE) {
             	action_claim_interface(&driver_obj);
             }
+            if(driver_obj.actions & ACTION_START_READING_DATA) {
+            	action_start_reading_data(&driver_obj);
+            }
             if (driver_obj.actions & ACTION_CLOSE_DEV) {
                 aciton_close_dev(&driver_obj);
             }
@@ -227,14 +242,5 @@ void class_driver_task(void *arg)
             }
         }
     }
-
-    /*
-    ESP_LOGI(TAG, "Deregistering Client");
-    ESP_ERROR_CHECK(usb_host_client_deregister(driver_obj.client_hdl));
-
-    //Wait to be deleted
-    xSemaphoreGive(signaling_sem);
-    vTaskSuspend(NULL);
-	*/
 }
 
