@@ -1,5 +1,5 @@
 # LC2412toMidi
- Midi CC-command to Midi-Note translator for LC2412
+ Midi CC-command to Midi-Note translator for LC2412 (& other midi-devices)
 
 # Done:
 - USB-Host functionality
