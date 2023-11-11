@@ -5,10 +5,10 @@
  *      Author: Katharina
  */
 
-#ifndef CLASS_DRIVER_TASK_H_
-#define CLASS_DRIVER_TASK_H_
+#ifndef MIDI_CLASS_DRIVER_H_
+#define MIDI_CLASS_DRIVER_H_
 
 #define CLIENT_NUM_EVENT_MSG        5
 extern void class_driver_task(void *arg);
 
-#endif /* CLASS_DRIVER_TASK_H_ */
+#endif /* MIDI_CLASS_DRIVER_H_ */

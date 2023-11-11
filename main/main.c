@@ -2,7 +2,7 @@
 #include <stdbool.h>
 #include <unistd.h>
 
-#include "../include/usb_host_handler.h"
+#include "usb_host_handler.h"
 
 void app_main(void)
 {

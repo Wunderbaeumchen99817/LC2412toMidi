@@ -4,7 +4,7 @@
  *  Created on: 06.11.2023
  *      Author: Katharina
  */
-#include "../include/class_driver_task.h"
+#include "midi_class_driver.h"
 
 #include <stdlib.h>
 #include "freertos/FreeRTOS.h"
@@ -12,19 +12,24 @@
 #include "esp_log.h"
 #include "usb/usb_host.h"
 
+#include "midi_class_driver_helper.h"
+
 #define ACTION_OPEN_DEV             0x01
 #define ACTION_GET_DEV_INFO         0x02
 #define ACTION_GET_DEV_DESC         0x04
 #define ACTION_GET_CONFIG_DESC      0x08
 #define ACTION_GET_STR_DESC         0x10
-#define ACTION_CLOSE_DEV            0x20
-#define ACTION_EXIT                 0x40
+#define ACTION_CLAIM_INTERFACE		0x20
+#define ACTION_CLOSE_DEV            0x40
+#define ACTION_EXIT                 0x80
 
 typedef struct {
     usb_host_client_handle_t client_hdl;
     uint8_t dev_addr;
     usb_device_handle_t dev_hdl;
     uint32_t actions;
+    uint8_t interface_nmbr;
+    uint8_t alternate_setting;
 } class_driver_t;
 
 static const char *TAG = "CLASS";
@@ -96,6 +101,15 @@ static void action_get_config_desc(class_driver_t *driver_obj)
     const usb_config_desc_t *config_desc;
     ESP_ERROR_CHECK(usb_host_get_active_config_descriptor(driver_obj->dev_hdl, &config_desc));
     usb_print_config_descriptor(config_desc, NULL);
+
+    //save interface number & alternative setting for later use
+    interface_config_t interface_conf = {0};
+    ESP_ERROR_CHECK(usb_host_get_active_config_descriptor(driver_obj->dev_hdl, &config_desc));
+    midi_class_helper_get_interface_settings(config_desc, &interface_conf);
+
+    driver_obj->interface_nmbr = interface_conf.interface_nmbr;
+    driver_obj->alternate_setting = interface_conf.alternate_setting;
+
     //Get the device's string descriptors next
     driver_obj->actions &= ~ACTION_GET_CONFIG_DESC;
     driver_obj->actions |= ACTION_GET_STR_DESC;
@@ -118,22 +132,31 @@ static void action_get_str_desc(class_driver_t *driver_obj)
         ESP_LOGI(TAG, "Getting Serial Number string descriptor");
         usb_print_string_descriptor(dev_info.str_desc_serial_num);
     }
-    //Nothing to do until the device disconnects
+    //Claim interface next
     driver_obj->actions &= ~ACTION_GET_STR_DESC;
+    driver_obj->actions |= ACTION_CLAIM_INTERFACE;
+}
+
+static void action_claim_interface(class_driver_t *driver_obj) {
+	assert(driver_obj->dev_hdl != NULL);
+	ESP_LOGI(TAG, "Claiming Interface");
+    ESP_ERROR_CHECK(usb_host_interface_claim(driver_obj->client_hdl, driver_obj->dev_hdl, driver_obj->interface_nmbr, driver_obj->alternate_setting));
+
+    //Nothing to do until the device disconnects
+    driver_obj->actions &= ~ACTION_CLAIM_INTERFACE;
 }
 
 static void aciton_close_dev(class_driver_t *driver_obj)
 {
-    ESP_ERROR_CHECK(usb_host_device_close(driver_obj->client_hdl, driver_obj->dev_hdl));
+	ESP_LOGI(TAG, "Releasing interface");
+	ESP_ERROR_CHECK(usb_host_interface_release(driver_obj->client_hdl, driver_obj->dev_hdl, driver_obj->interface_nmbr));
+    ESP_LOGI(TAG, "Closing device");
+	ESP_ERROR_CHECK(usb_host_device_close(driver_obj->client_hdl, driver_obj->dev_hdl));
     driver_obj->dev_hdl = NULL;
     driver_obj->dev_addr = 0;
     //We need to exit the event handler loop
     driver_obj->actions &= ~ACTION_CLOSE_DEV;
     driver_obj->actions |= ACTION_EXIT;
-}
-
-static void data_received(void *arg) {
-
 }
 
 static void start_midi(void *arg) {
@@ -143,13 +166,13 @@ static void start_midi(void *arg) {
 	uint8_t *data_buffer[10];
 
     usb_transfer_t transfer_obj = {
-    		.callback = data_received,
+    		.callback = NULL,
 			.data_buffer = *data_buffer,
 			.data_buffer_size = sizeof(*data_buffer),
 			.device_handle = dev_hdl
     };
 
-    usb_host_transfer_alloc(sizeof(*data_buffer), 0, &transfer_obj);
+    //usb_host_transfer_alloc(sizeof(*data_buffer), 0, transfer_obj);
 
 }
 
@@ -192,6 +215,9 @@ void class_driver_task(void *arg)
             }
             if (driver_obj.actions & ACTION_GET_STR_DESC) {
                 action_get_str_desc(&driver_obj);
+            }
+            if(driver_obj.actions & ACTION_CLAIM_INTERFACE) {
+            	action_claim_interface(&driver_obj);
             }
             if (driver_obj.actions & ACTION_CLOSE_DEV) {
                 aciton_close_dev(&driver_obj);

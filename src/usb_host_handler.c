@@ -7,13 +7,13 @@
 
 #include "../include/usb_host_handler.h"
 
+#include "../include/midi_class_driver.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 #include "esp_log.h"
 #include "esp_intr_alloc.h"
 
-#include "../include/class_driver_task.h"
 
 static const char *TAG = "DAEMON";
 
