@@ -1,8 +1,7 @@
 /*
  * usb_host.c
  *
- *  Created on: 05.11.2023
- *      Author: Katharina
+ *  Author: Wunderbaeumchen99817
  */
 
 #include "usb_host_handler.h"

@@ -1,19 +1,19 @@
 /*
  * class_driver_task.c
  *
- *  Created on: 06.11.2023
- *      Author: Katharina
+ *      Author: Wunderbaeumchen99817
  */
 #include "midi_class_driver.h"
 
 #include <stdlib.h>
 #include <string.h>
 #include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "freertos/semphr.h"
 #include "esp_log.h"
 #include "usb/usb_host.h"
+#include "freertos/queue.h"
 
-#include "midi_class_driver_helper.h"
 #include "midi_handler.h"
 
 #define ACTION_OPEN_DEV             0x01
@@ -26,6 +26,15 @@
 #define ACTION_CLOSE_DEV            0x80
 #define ACTION_EXIT                 0xA0
 
+#define MIDI_MESSAGE_LENGTH 4
+
+typedef struct {
+	uint8_t interface_nmbr;
+	uint8_t alternate_setting;
+	uint8_t endpoint_address;
+	uint8_t max_packet_size;
+} interface_config_t;
+
 typedef struct {
     usb_host_client_handle_t client_hdl;
     uint8_t dev_addr;
@@ -34,7 +43,7 @@ typedef struct {
     interface_config_t interface_conf;
 } class_driver_t;
 
-static const char *TAG = "CLASS";
+static const char *TAG = "HOST CLASS";
 
 static void client_event_cb(const usb_host_client_event_msg_t *event_msg, void *arg)
 {
@@ -57,6 +66,67 @@ static void client_event_cb(const usb_host_client_event_msg_t *event_msg, void *
         //Should never occur
         abort();
     }
+}
+
+void midi_usb_host_callback(usb_transfer_t *transfer) {
+	int size = (int)transfer->actual_num_bytes;
+	//one message contains 4 bytes of data
+	int num_messages = size/MIDI_MESSAGE_LENGTH;
+
+	int offset = 0;
+	//print messages
+	if(num_messages) {
+		midi_message_t message_obj = {0};
+		//print each message separately
+		for(int i = 0; i < num_messages; i++) {
+			for (int j = 0; j < MIDI_MESSAGE_LENGTH; j++) {
+				message_obj.bytes[j] = transfer->data_buffer[j+offset];
+			}
+			xQueueSend(get_midi_queue_hdl(), &message_obj, 0);
+			offset += MIDI_MESSAGE_LENGTH;
+		}
+	}
+
+	ESP_ERROR_CHECK(usb_host_transfer_submit(transfer));
+}
+
+static void get_midi_interface_settings(const usb_config_desc_t *usb_conf, interface_config_t *interface_conf) {
+	assert(usb_conf != NULL);
+	assert(interface_conf != NULL);
+
+	ESP_LOGI(TAG, "Getting interface config");
+
+	int offset = 0;
+	    uint16_t wTotalLength = usb_conf->wTotalLength;
+	    const usb_standard_desc_t *next_desc = (const usb_standard_desc_t *)usb_conf;
+
+	    do {
+	    	if(next_desc->bDescriptorType == USB_B_DESCRIPTOR_TYPE_INTERFACE) {
+	    		usb_intf_desc_t *interface_desc = (usb_intf_desc_t *)next_desc;
+
+	    		//check if there are >0 endpoints
+	    		if(interface_desc->bNumEndpoints > 0) {
+	    			//use interface
+	    			interface_conf->interface_nmbr = interface_desc->bInterfaceNumber;
+	    			interface_conf->alternate_setting = interface_desc->bAlternateSetting;
+
+	    			printf("Interface Number: %d, Alternate Setting: %d \n", interface_conf->interface_nmbr, interface_conf->alternate_setting);
+
+	    		}
+	    	}
+	    	if(next_desc->bDescriptorType == USB_B_DESCRIPTOR_TYPE_ENDPOINT) {
+	    		usb_ep_desc_t *ep_desc = (usb_ep_desc_t *)next_desc;
+	    		if(USB_EP_DESC_GET_EP_DIR(ep_desc)) {
+	    			//endpoint is IN
+	    			interface_conf->endpoint_address = ep_desc->bEndpointAddress;
+	    			interface_conf->max_packet_size = ep_desc->wMaxPacketSize;
+	    			printf("endpoint address: %d , mps: %d\n", interface_conf->endpoint_address, interface_conf->max_packet_size);
+	    		}
+	    	}
+
+	        next_desc = usb_parse_next_descriptor(next_desc, wTotalLength, &offset);
+
+	    } while (next_desc != NULL);
 }
 
 static void action_open_dev(class_driver_t *driver_obj)
@@ -107,7 +177,7 @@ static void action_get_config_desc(class_driver_t *driver_obj)
     //save interface number & alternative setting for later use
     interface_config_t interface_config = {0};
     ESP_ERROR_CHECK(usb_host_get_active_config_descriptor(driver_obj->dev_hdl, &config_desc));
-    midi_class_helper_get_interface_settings(config_desc, &interface_config);
+    get_midi_interface_settings(config_desc, &interface_config);
 
     driver_obj->interface_conf = interface_config;
 
@@ -151,7 +221,7 @@ static void action_claim_interface(class_driver_t *driver_obj) {
     driver_obj->actions |= ACTION_START_READING_DATA;
 }
 
-static void action_start_reading_data(class_driver_t *driver_obj) {
+static void action_start_reading_data(class_driver_t *driver_obj, TaskHandle_t *midi_task_hdl) {
 	assert(driver_obj->dev_hdl != NULL);
 	ESP_LOGI(TAG, "Starting midi task");
 
@@ -169,12 +239,21 @@ static void action_start_reading_data(class_driver_t *driver_obj) {
 		transfer_obj->device_handle = driver_obj->dev_hdl;
 	printf("set transfer parameters\n");
     ESP_ERROR_CHECK(usb_host_transfer_submit(transfer_obj));
+
+    //start midi task
+    xTaskCreate(
+    		midi_usb_host_task,
+			"midi",
+			4096,
+			NULL,
+			MIDI_TASK_PRIORITY,
+			midi_task_hdl);
+
 	//Nothing to do until the device disconnects
     driver_obj->actions &= ~ACTION_START_READING_DATA;
-
 }
 
-static void aciton_close_dev(class_driver_t *driver_obj)
+static void aciton_close_dev(class_driver_t *driver_obj, TaskHandle_t *midi_task_hdl)
 {
 	ESP_LOGI(TAG, "Releasing interface");
 	ESP_ERROR_CHECK(usb_host_interface_release(
@@ -185,6 +264,10 @@ static void aciton_close_dev(class_driver_t *driver_obj)
 	ESP_ERROR_CHECK(usb_host_device_close(driver_obj->client_hdl, driver_obj->dev_hdl));
     driver_obj->dev_hdl = NULL;
     driver_obj->dev_addr = 0;
+
+    //kill midi task
+    vTaskDelete(*midi_task_hdl);
+
     //We need to exit the event handler loop
     driver_obj->actions &= ~ACTION_CLOSE_DEV;
     driver_obj->actions |= ACTION_EXIT;
@@ -209,6 +292,8 @@ void class_driver_task(void *arg)
     };
     ESP_ERROR_CHECK(usb_host_client_register(&client_config, &driver_obj.client_hdl));
 
+    TaskHandle_t midi_task_hdl;
+
     while (1) {
         if (driver_obj.actions == 0) {
             usb_host_client_handle_events(driver_obj.client_hdl, portMAX_DELAY);
@@ -232,10 +317,10 @@ void class_driver_task(void *arg)
             	action_claim_interface(&driver_obj);
             }
             if(driver_obj.actions & ACTION_START_READING_DATA) {
-            	action_start_reading_data(&driver_obj);
+            	action_start_reading_data(&driver_obj, &midi_task_hdl);
             }
             if (driver_obj.actions & ACTION_CLOSE_DEV) {
-                aciton_close_dev(&driver_obj);
+                aciton_close_dev(&driver_obj, &midi_task_hdl);
             }
             if (driver_obj.actions & ACTION_EXIT) {
                 driver_obj.actions = 0;

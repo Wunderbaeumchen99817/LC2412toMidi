@@ -1,33 +1,43 @@
 /*
  * midi_handler.c
  *
- *  Created on: 11.11.2023
- *      Author: Katharina
+ *      Author: Wunderbaeumchen99817
  */
 
 #include "midi_handler.h"
 
 #include <stdlib.h>
-
-#define MESSAGE_LENGTH 4
+#include "esp_log.h"
 
 static const char *TAG = "MIDI";
 
+static QueueHandle_t midi_queue_hdl;
 
-void midi_usb_host_callback(usb_transfer_t *transfer) {
+static void message_control_change(midi_message_t *message) {
+	uint8_t second_byte = message->bytes[2];
+	uint8_t third_byte = message->bytes[3];
+	printf("%d %d\n", second_byte, third_byte);
+}
 
-	int size = (int)transfer->actual_num_bytes;
-	//one message contains 4 bytes of data
-	int num_messages = size/MESSAGE_LENGTH;
+void midi_usb_host_task(void *arg) {
+	midi_message_t message_obj;
+	midi_queue_hdl = xQueueCreate(4, sizeof(midi_message_t));
 
-	int offset = 0;
-	//print messages
-	for(int i = 0; i < num_messages; i++) {
-		for (int j = 0; j < MESSAGE_LENGTH; j++) {
-			printf("%d ", transfer->data_buffer[j+offset]);
+	while(1) {
+		if(xQueueReceive(midi_queue_hdl, &message_obj, portMAX_DELAY)) {
+			if(message_obj.bytes[1] == 176) {
+				message_control_change(&message_obj);
+			}
+			/*printf("%d %d %d %d \n",
+					message_obj.bytes[0],
+					message_obj.bytes[1],
+					message_obj.bytes[2],
+					message_obj.bytes[3]);
+			*/
 		}
-		printf("\n");
-		offset += MESSAGE_LENGTH;
 	}
-	ESP_ERROR_CHECK(usb_host_transfer_submit(transfer));
+}
+
+QueueHandle_t get_midi_queue_hdl(void) {
+	return midi_queue_hdl;
 }

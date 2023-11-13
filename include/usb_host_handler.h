@@ -1,8 +1,7 @@
 /*
  * usb_host_handler.h
  *
- *  Created on: 05.11.2023
- *      Author: Katharina
+ *  Author: Wunderbaeumchen99817
  */
 
 #ifndef USB_HOST_HANDLER_H_

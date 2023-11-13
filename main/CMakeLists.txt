@@ -3,7 +3,6 @@
 
 idf_component_register(
     SRCS "main.c"        # list the source files of this component
-    	"../src/midi_class_driver_helper.c"
     	"../src/midi_class_driver.c"
     	"../src/usb_host_handler.c"
     	"../src/midi_handler.c"
